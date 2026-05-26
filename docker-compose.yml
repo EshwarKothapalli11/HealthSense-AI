@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  healthsense-ai:
+    build: .
+    ports:
+      - "7860:7860"
+    volumes:
+      - ./artifacts:/app/artifacts
+      - ./data:/app/data
+    environment:
+      - GRADIO_SERVER_NAME=0.0.0.0
