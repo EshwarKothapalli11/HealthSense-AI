@@ -1,45 +1,49 @@
 """
-diabetes_model.py — DNN model for Pima Indians Diabetes prediction.
+diabetes_model.py — XGBoost model for Pima Indians Diabetes prediction.
 
-Architecture: 3-layer dense network with dropout regularization.
+Architecture: Gradient-boosted tree ensemble with regularization and
+early stopping on a held-out validation set.
 """
 
 import os
 import sys
+import pickle
 
 import numpy as np
-import tensorflow as tf
-from tensorflow.keras.layers import Dense, Dropout, Input
-from tensorflow.keras.models import Model
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.metrics import AUC
-from tensorflow.keras.callbacks import (
-    EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
-)
+import xgboost as xgb
 from sklearn.utils.class_weight import compute_class_weight
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 import config
 
 
-def build_diabetes_model(input_dim: int) -> tf.keras.Model:
+def build_diabetes_model(input_dim: int = 8) -> xgb.XGBClassifier:
     """
-    Build a deep neural network for diabetes prediction.
+    Build an XGBoost classifier for diabetes prediction.
 
     Args:
-        input_dim: Number of input features.
+        input_dim: Number of input features (unused, kept for API parity).
 
     Returns:
-        Compiled Keras Model.
+        Configured (unfitted) XGBClassifier.
     """
-    inputs = Input(shape=(input_dim,), name='diabetes_input')
-    x = Dense(64, activation='relu')(inputs)
-    x = Dropout(0.3)(x)
-    x = Dense(32, activation='relu')(x)
-    x = Dropout(0.2)(x)
-    x = Dense(16, activation='relu')(x)
-    outputs = Dense(1, activation='sigmoid', name='diabetes_output')(x)
-    return Model(inputs, outputs, name='DiabetesDNN')
+    model = xgb.XGBClassifier(
+        n_estimators=config.XGB_D_N_ESTIMATORS,
+        max_depth=config.XGB_D_MAX_DEPTH,
+        learning_rate=config.XGB_D_LEARNING_RATE,
+        subsample=config.XGB_D_SUBSAMPLE,
+        colsample_bytree=config.XGB_D_COLSAMPLE_BYTREE,
+        min_child_weight=config.XGB_D_MIN_CHILD_WEIGHT,
+        gamma=config.XGB_D_GAMMA,
+        reg_alpha=config.XGB_D_REG_ALPHA,
+        reg_lambda=config.XGB_D_REG_LAMBDA,
+        objective='binary:logistic',
+        eval_metric=['logloss', 'auc'],
+        use_label_encoder=False,
+        random_state=config.RANDOM_STATE,
+        verbosity=1,
+    )
+    return model
 
 
 def train_diabetes_model(
@@ -47,9 +51,9 @@ def train_diabetes_model(
     y_train: np.ndarray,
     X_val: np.ndarray,
     y_val: np.ndarray
-) -> tuple[tf.keras.Model, tf.keras.callbacks.History]:
+) -> tuple[xgb.XGBClassifier, dict]:
     """
-    Train the diabetes DNN model.
+    Train the diabetes XGBoost model.
 
     Args:
         X_train: Training features.
@@ -58,65 +62,72 @@ def train_diabetes_model(
         y_val: Validation labels.
 
     Returns:
-        Tuple of (trained_model, training_history).
+        Tuple of (trained_model, eval_results_dict).
+        eval_results_dict has structure:
+        {'train': {'logloss': [...], 'auc': [...]},
+         'val':   {'logloss': [...], 'auc': [...]}}
     """
-    print("\n[INFO] Building Diabetes model...")
-    model = build_diabetes_model(input_dim=X_train.shape[1])
+    print("\n[INFO] Tuning Diabetes XGBoost model with GridSearchCV...")
+    base_model = build_diabetes_model(input_dim=X_train.shape[1])
 
-    model.compile(
-        optimizer=Adam(learning_rate=config.LEARNING_RATE),
-        loss='binary_crossentropy',
-        metrics=['accuracy', AUC(name='auc')]
-    )
-
-    model.summary()
-
-    # Compute class weights for imbalanced data
+    # Compute scale_pos_weight for class imbalance
     classes = np.unique(y_train)
     weights = compute_class_weight('balanced', classes=classes, y=y_train)
     class_weights = dict(zip(classes.astype(int), weights))
+    scale_pos = class_weights.get(1, 1.0) / class_weights.get(0, 1.0)
+    base_model.set_params(scale_pos_weight=scale_pos)
     print(f"  Class weights: {class_weights}")
+    print(f"  scale_pos_weight: {scale_pos:.4f}")
 
-    # Callbacks
-    os.makedirs(config.MODELS_DIR, exist_ok=True)
-    callbacks = [
-        EarlyStopping(
-            monitor='val_loss',
-            patience=config.EARLY_STOPPING_PATIENCE,
-            restore_best_weights=True,
-            verbose=1
-        ),
-        ReduceLROnPlateau(
-            monitor='val_loss',
-            patience=config.REDUCE_LR_PATIENCE,
-            factor=config.REDUCE_LR_FACTOR,
-            min_lr=config.MIN_LR,
-            verbose=1
-        ),
-        ModelCheckpoint(
-            os.path.join(config.MODELS_DIR, 'diabetes_best.h5'),
-            monitor='val_loss',
-            save_best_only=True,
-            verbose=1
-        )
-    ]
+    # Search over a compact, robust grid for best ROC-AUC
+    from sklearn.model_selection import GridSearchCV
+    param_grid = {
+        'max_depth': [3, 4, 5],
+        'learning_rate': [0.01, 0.05, 0.1],
+        'n_estimators': [100, 150, 200],
+        'subsample': [0.7, 0.8, 0.9],
+        'colsample_bytree': [0.7, 0.8, 0.9],
+        'reg_alpha': [0.0, 0.1, 1.0],
+        'reg_lambda': [1.0, 2.0]
+    }
 
-    print("\n[INFO] Training Diabetes model...")
-    history = model.fit(
-        X_train, y_train,
-        validation_data=(X_val, y_val),
-        epochs=config.MAX_EPOCHS,
-        batch_size=config.BATCH_SIZE,
-        class_weight=class_weights,
-        callbacks=callbacks,
+    grid = GridSearchCV(
+        estimator=base_model,
+        param_grid=param_grid,
+        scoring='roc_auc',
+        cv=3,
+        n_jobs=-1,
         verbose=1
     )
+    grid.fit(X_train, y_train)
 
-    print("  ✓ Diabetes model training complete!")
-    return model, history
+    model = grid.best_estimator_
+    print(f"  Best params: {grid.best_params_}")
+    print(f"  Best CV ROC-AUC: {grid.best_score_:.4f}")
+
+    # Train with early stopping on best estimator to get evals_result
+    eval_set = [(X_train, y_train), (X_val, y_val)]
+    model.fit(
+        X_train, y_train,
+        eval_set=eval_set,
+        verbose=False,
+    )
+
+    # Extract evaluation results
+    eval_results = model.evals_result()
+
+    # Save model
+    os.makedirs(config.MODELS_DIR, exist_ok=True)
+    model_path = os.path.join(config.MODELS_DIR, 'diabetes_best.pkl')
+    with open(model_path, 'wb') as f:
+        pickle.dump(model, f)
+    print(f"  [SUCCESS] Model saved to {model_path}")
+    print("  [SUCCESS] Diabetes XGBoost model training complete!")
+    return model, eval_results
+
 
 
 if __name__ == "__main__":
     from src.data.preprocess_tabular import prepare_diabetes
     X_train, X_test, y_train, y_test, _ = prepare_diabetes()
-    model, history = train_diabetes_model(X_train, y_train, X_test, y_test)
+    model, eval_results = train_diabetes_model(X_train, y_train, X_test, y_test)

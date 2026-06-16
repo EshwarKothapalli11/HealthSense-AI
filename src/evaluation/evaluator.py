@@ -2,6 +2,7 @@
 evaluator.py — Model evaluation with metrics, plots, and feature importance.
 
 Provides comprehensive evaluation reporting for all three HealthSense AI models.
+Supports both XGBoost (tabular) and Keras (LSTM) model types.
 Uses a light glassmorphism-inspired plot style.
 """
 
@@ -23,6 +24,33 @@ from sklearn.inspection import permutation_importance
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 import config
+
+
+def _is_keras_model(model: Any) -> bool:
+    """Check if a model is a Keras model (vs XGBoost/sklearn)."""
+    try:
+        import tensorflow as tf
+        return isinstance(model, tf.keras.Model)
+    except ImportError:
+        return False
+
+
+def _predict_proba(model: Any, X: np.ndarray) -> np.ndarray:
+    """
+    Get probability predictions from either a Keras or XGBoost model.
+
+    Args:
+        model: Trained model (Keras or XGBoost).
+        X: Input features.
+
+    Returns:
+        1D array of positive-class probabilities.
+    """
+    if _is_keras_model(model):
+        return model.predict(X, verbose=0).flatten()
+    else:
+        # XGBoost / sklearn API
+        return model.predict_proba(X)[:, 1]
 
 
 def apply_light_glass_style(fig: plt.Figure, ax_list: list) -> None:
@@ -61,8 +89,10 @@ class ModelEvaluator:
         """
         Evaluate a trained model on test data.
 
+        Supports both Keras and XGBoost/sklearn models.
+
         Args:
-            model: Trained Keras model.
+            model: Trained model (Keras or XGBoost).
             X_test: Test feature array.
             y_test: True labels.
             model_name: Name identifier for the model.
@@ -75,8 +105,8 @@ class ModelEvaluator:
         print(f"  Evaluation Report: {model_name}")
         print(f"{'='*50}")
 
-        # Predict
-        y_prob = model.predict(X_test, verbose=0).flatten()
+        # Predict probabilities (model-agnostic)
+        y_prob = _predict_proba(model, X_test)
         y_pred = (y_prob >= threshold).astype(int)
 
         # Metrics
@@ -111,10 +141,14 @@ class ModelEvaluator:
         self, history: Any, model_name: str
     ) -> str:
         """
-        Plot training and validation loss and accuracy curves.
+        Plot training and validation curves.
+
+        Supports both:
+        - Keras History object (has .history dict with 'loss', 'accuracy', etc.)
+        - XGBoost eval_results dict (has 'validation_0'/'validation_1' with 'logloss', 'auc')
 
         Args:
-            history: Keras training History object.
+            history: Keras History or XGBoost evals_result dict.
             model_name: Name identifier for saved plot.
 
         Returns:
@@ -124,35 +158,69 @@ class ModelEvaluator:
         fig.set_facecolor("#eef4fc")
         apply_light_glass_style(fig, [ax1, ax2])
 
-        # Loss plot
-        ax1.plot(history.history['loss'], color="#4a90d9", linewidth=2.5, label='Train Loss')
-        ax1.plot(history.history['val_loss'], color="#9b72d4", linewidth=2.5,
-                 label='Val Loss', linestyle="--")
-        ax1.fill_between(range(len(history.history['loss'])),
-                         history.history['loss'], alpha=0.08, color="#4a90d9")
-        ax1.set_title(f'{model_name} — Loss', fontsize=14, fontweight='bold')
-        ax1.set_xlabel('Epoch')
-        ax1.set_ylabel('Loss')
-        ax1.legend(facecolor="#ffffff", labelcolor="#2d4060",
-                   framealpha=0.9, edgecolor="#b4cdeb")
+        if hasattr(history, 'history'):
+            # --- Keras History ---
+            ax1.plot(history.history['loss'], color="#4a90d9", linewidth=2.5, label='Train Loss')
+            ax1.plot(history.history['val_loss'], color="#9b72d4", linewidth=2.5,
+                     label='Val Loss', linestyle="--")
+            ax1.fill_between(range(len(history.history['loss'])),
+                             history.history['loss'], alpha=0.08, color="#4a90d9")
+            ax1.set_title(f'{model_name} — Loss', fontsize=14, fontweight='bold')
+            ax1.set_xlabel('Epoch')
+            ax1.set_ylabel('Loss')
+            ax1.legend(facecolor="#ffffff", labelcolor="#2d4060",
+                       framealpha=0.9, edgecolor="#b4cdeb")
 
-        # Accuracy plot
-        ax2.plot(history.history['accuracy'], color="#4a90d9", linewidth=2.5, label='Train Accuracy')
-        ax2.plot(history.history['val_accuracy'], color="#9b72d4", linewidth=2.5,
-                 label='Val Accuracy', linestyle="--")
-        ax2.fill_between(range(len(history.history['accuracy'])),
-                         history.history['accuracy'], alpha=0.08, color="#4a90d9")
-        ax2.set_title(f'{model_name} — Accuracy', fontsize=14, fontweight='bold')
-        ax2.set_xlabel('Epoch')
-        ax2.set_ylabel('Accuracy')
-        ax2.legend(facecolor="#ffffff", labelcolor="#2d4060",
-                   framealpha=0.9, edgecolor="#b4cdeb")
+            ax2.plot(history.history['accuracy'], color="#4a90d9", linewidth=2.5, label='Train Accuracy')
+            ax2.plot(history.history['val_accuracy'], color="#9b72d4", linewidth=2.5,
+                     label='Val Accuracy', linestyle="--")
+            ax2.fill_between(range(len(history.history['accuracy'])),
+                             history.history['accuracy'], alpha=0.08, color="#4a90d9")
+            ax2.set_title(f'{model_name} — Accuracy', fontsize=14, fontweight='bold')
+            ax2.set_xlabel('Epoch')
+            ax2.set_ylabel('Accuracy')
+            ax2.legend(facecolor="#ffffff", labelcolor="#2d4060",
+                       framealpha=0.9, edgecolor="#b4cdeb")
+        else:
+            # --- XGBoost evals_result dict ---
+            # Keys are 'validation_0' (train) and 'validation_1' (val)
+            train_key = 'validation_0'
+            val_key = 'validation_1'
+
+            # Plot 1: Log Loss
+            train_logloss = history[train_key]['logloss']
+            val_logloss = history[val_key]['logloss']
+            rounds = range(len(train_logloss))
+
+            ax1.plot(rounds, train_logloss, color="#4a90d9", linewidth=2.5, label='Train LogLoss')
+            ax1.plot(rounds, val_logloss, color="#9b72d4", linewidth=2.5,
+                     label='Val LogLoss', linestyle="--")
+            ax1.fill_between(rounds, train_logloss, alpha=0.08, color="#4a90d9")
+            ax1.set_title(f'{model_name} — Log Loss', fontsize=14, fontweight='bold')
+            ax1.set_xlabel('Boosting Round')
+            ax1.set_ylabel('Log Loss')
+            ax1.legend(facecolor="#ffffff", labelcolor="#2d4060",
+                       framealpha=0.9, edgecolor="#b4cdeb")
+
+            # Plot 2: AUC
+            train_auc = history[train_key]['auc']
+            val_auc = history[val_key]['auc']
+
+            ax2.plot(rounds, train_auc, color="#4a90d9", linewidth=2.5, label='Train AUC')
+            ax2.plot(rounds, val_auc, color="#9b72d4", linewidth=2.5,
+                     label='Val AUC', linestyle="--")
+            ax2.fill_between(rounds, train_auc, alpha=0.08, color="#4a90d9")
+            ax2.set_title(f'{model_name} — AUC', fontsize=14, fontweight='bold')
+            ax2.set_xlabel('Boosting Round')
+            ax2.set_ylabel('AUC')
+            ax2.legend(facecolor="#ffffff", labelcolor="#2d4060",
+                       framealpha=0.9, edgecolor="#b4cdeb")
 
         plt.tight_layout()
         path = os.path.join(config.PLOTS_DIR, f'{model_name}_history.png')
         fig.savefig(path, dpi=150, bbox_inches='tight', facecolor="#eef4fc")
         plt.close(fig)
-        print(f"  ✓ Training history plot saved: {path}")
+        print(f"  [SUCCESS] Training history plot saved: {path}")
         return path
 
     def plot_confusion_matrix(
@@ -197,7 +265,7 @@ class ModelEvaluator:
         path = os.path.join(config.PLOTS_DIR, f'{model_name}_confusion.png')
         fig.savefig(path, dpi=150, bbox_inches='tight', facecolor="#eef4fc")
         plt.close(fig)
-        print(f"  ✓ Confusion matrix saved: {path}")
+        print(f"  [SUCCESS] Confusion matrix saved: {path}")
         return path
 
     def compute_permutation_importance(
@@ -208,10 +276,13 @@ class ModelEvaluator:
         feature_names: list[str]
     ) -> pd.DataFrame:
         """
-        Compute permutation feature importance for a Keras model.
+        Compute permutation feature importance for any model.
+
+        For XGBoost/sklearn models, uses their native API directly.
+        For Keras models, wraps them in a sklearn-compatible interface.
 
         Args:
-            model: Trained Keras model.
+            model: Trained model (Keras or XGBoost).
             X_test: Test features.
             y_test: True labels.
             feature_names: List of feature names.
@@ -219,29 +290,32 @@ class ModelEvaluator:
         Returns:
             pd.DataFrame: Sorted by mean importance descending.
         """
+        if _is_keras_model(model):
+            # Wrap Keras model for sklearn compatibility
+            class _KerasWrapper:
+                def __init__(self, keras_model):
+                    self._model = keras_model
 
-        # Wrap Keras model for sklearn compatibility
-        class _KerasWrapper:
-            def __init__(self, keras_model):
-                self._model = keras_model
+                def fit(self, X, y):
+                    return self  # No-op: model is already trained
 
-            def fit(self, X, y):
-                return self  # No-op: model is already trained
+                def predict(self, X):
+                    return (self._model.predict(X, verbose=0).flatten() >= 0.5).astype(int)
 
-            def predict(self, X):
-                return (self._model.predict(X, verbose=0).flatten() >= 0.5).astype(int)
+                def score(self, X, y):
+                    y_pred = self.predict(X)
+                    return accuracy_score(y, y_pred)
 
-            def score(self, X, y):
-                y_pred = self.predict(X)
-                return accuracy_score(y, y_pred)
-
-        wrapper = _KerasWrapper(model)
+            estimator = _KerasWrapper(model)
+        else:
+            # XGBoost/sklearn models already have .score()
+            estimator = model
 
         result = permutation_importance(
-            wrapper, X_test, y_test,
+            estimator, X_test, y_test,
             n_repeats=10,
             random_state=config.RANDOM_STATE,
-            scoring=None  # Use wrapper's score method
+            scoring=None  # Use estimator's score method
         )
 
         importance_df = pd.DataFrame({
@@ -296,5 +370,5 @@ class ModelEvaluator:
         path = os.path.join(config.PLOTS_DIR, f'{model_name}_importance.png')
         fig.savefig(path, dpi=150, bbox_inches='tight', facecolor="#eef4fc")
         plt.close(fig)
-        print(f"  ✓ Feature importance plot saved: {path}")
+        print(f"  [SUCCESS] Feature importance plot saved: {path}")
         return path

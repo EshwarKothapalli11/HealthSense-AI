@@ -109,7 +109,7 @@ def save_scaler(scaler: Any, path: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'wb') as f:
         pickle.dump(scaler, f)
-    print(f"  ✓ Scaler saved to {path}")
+    print(f"  [SUCCESS] Scaler saved to {path}")
 
 
 def load_scaler(path: str) -> Any:
@@ -158,15 +158,15 @@ def prepare_diabetes() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, 
     # Save scaler
     save_scaler(scaler, os.path.join(config.SCALERS_DIR, "diabetes_scaler.pkl"))
 
-    print(f"  ✓ Diabetes data ready — Train: {X_train.shape}, Test: {X_test.shape}")
+    print(f"  [SUCCESS] Diabetes data ready — Train: {X_train.shape}, Test: {X_test.shape}")
     return X_train, X_test, y_train, y_test, feature_names
 
 
 def prepare_heart() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[str]]:
     """
-    Full preprocessing pipeline for the Heart Disease dataset.
+    Full preprocessing pipeline for the Heart Disease dataset with clinical data augmentation.
 
-    Pipeline: load → impute → encode categoricals → split → scale → save scaler.
+    Pipeline: load → augment extreme profiles → impute → encode categoricals → split → scale → save scaler.
 
     Returns:
         Tuple of (X_train, X_test, y_train, y_test, feature_names).
@@ -175,12 +175,61 @@ def prepare_heart() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, lis
 
     df = pd.read_csv("data/raw/heart.csv")
 
+    # Clinical Data Augmentation: add synthetic extreme risk patients to teach
+    # tree model correct classification boundaries for extreme outlier inputs.
+    np.random.seed(42)
+    synthetic_rows = []
+    for _ in range(50):
+        synthetic_rows.append({
+            'age': float(np.random.randint(80, 121)),
+            'sex': float(np.random.choice([0.0, 1.0])),
+            'cp': float(np.random.choice([1.0, 2.0, 3.0, 4.0])),
+            'trestbps': float(np.random.randint(160, 201)),
+            'chol': float(np.random.randint(300, 601)),
+            'fbs': float(np.random.choice([0.0, 1.0])),
+            'restecg': float(np.random.choice([0.0, 1.0, 2.0])),
+            'thalach': float(np.random.randint(80, 120)),
+            'exang': float(np.random.choice([0.0, 1.0])),
+            'oldpeak': float(np.random.uniform(4.0, 7.0)),
+            'slope': float(np.random.choice([1.0, 2.0, 3.0])),
+            'ca': float(np.random.choice([0.0, 1.0, 2.0, 3.0])),
+            'thal': float(np.random.choice([3.0, 6.0, 7.0])),
+            'target': 1.0
+        })
+    synthetic_df = pd.DataFrame(synthetic_rows)
+    df = pd.concat([df, synthetic_df], ignore_index=True)
+
+    # Compute clinical risk index (sum of binary indicators for high-risk flags)
+    # 1. age > 65
+    # 2. trestbps (resting blood pressure) > 140
+    # 3. chol (cholesterol) > 240
+    # 4. thalach (max heart rate) < 120
+    # 5. oldpeak (ST depression) > 2.0
+    # 6. exang (exercise induced angina) == 1
+    # 7. ca (number of major vessels) > 0
+    # 8. thal in [6.0, 7.0] (Fixed/Reversable Defect)
+    # 9. cp == 4 (Asymptomatic Chest Pain)
+    age_risk = (df['age'] > 65).astype(int)
+    bp_risk = (df['trestbps'] > 140).astype(int)
+    chol_risk = (df['chol'] > 240).astype(int)
+    thalach_risk = (df['thalach'] < 120).astype(int)
+    oldpeak_risk = (df['oldpeak'] > 2.0).astype(int)
+    exang_risk = (df['exang'] == 1).astype(int)
+    ca_risk = (df['ca'] > 0).astype(int)
+    thal_risk = df['thal'].isin([6.0, 7.0]).astype(int)
+    cp_risk = (df['cp'] == 4).astype(int)
+
+    df['clinical_risk_index'] = (
+        age_risk + bp_risk + chol_risk + thalach_risk +
+        oldpeak_risk + exang_risk + ca_risk + thal_risk + cp_risk
+    ).astype(np.float32)
+
     # Identify categorical columns (typically: sex, cp, fbs, restecg, exang, slope, ca, thal)
     categorical_cols = []
     for col in df.columns:
         if col == 'target':
             continue
-        if df[col].nunique() <= 5 and col not in ['age', 'trestbps', 'chol', 'thalach', 'oldpeak']:
+        if df[col].nunique() <= 5 and col not in ['age', 'trestbps', 'chol', 'thalach', 'oldpeak', 'clinical_risk_index']:
             categorical_cols.append(col)
 
     # Impute zeros in continuous columns if applicable
@@ -212,8 +261,9 @@ def prepare_heart() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, lis
     # Save scaler
     save_scaler(scaler, os.path.join(config.SCALERS_DIR, "heart_scaler.pkl"))
 
-    print(f"  ✓ Heart data ready — Train: {X_train.shape}, Test: {X_test.shape}")
+    print(f"  [SUCCESS] Heart data ready — Train: {X_train.shape}, Test: {X_test.shape}")
     return X_train, X_test, y_train, y_test, feature_names
+
 
 
 if __name__ == "__main__":

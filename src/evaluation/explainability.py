@@ -1,12 +1,17 @@
 """
-explainability.py — Gradient-based model explainability for HealthSense AI.
+explainability.py — Model explainability for HealthSense AI.
 
-Provides gradient saliency and influential feature/token extraction for
-both tabular and text (LSTM) models.
+Provides gradient-based saliency for Keras models and built-in feature
+importance for XGBoost models, plus influential token extraction for LSTM.
 """
 
 import numpy as np
 import tensorflow as tf
+
+
+def _is_keras_model(model) -> bool:
+    """Check if a model is a Keras model (vs XGBoost/sklearn)."""
+    return isinstance(model, tf.keras.Model)
 
 
 def compute_gradient_saliency(
@@ -42,7 +47,7 @@ def compute_gradient_saliency(
 
 
 def get_top_influential_features(
-    model: tf.keras.Model,
+    model,
     input_sample: np.ndarray,
     feature_names: list[str],
     top_n: int = 5
@@ -50,8 +55,11 @@ def get_top_influential_features(
     """
     Get the top-N most influential features for a prediction.
 
+    For Keras models: uses gradient saliency.
+    For XGBoost models: uses built-in feature_importances_.
+
     Args:
-        model: Trained Keras model.
+        model: Trained model (Keras or XGBoost).
         input_sample: Single input sample.
         feature_names: List of feature names corresponding to input dimensions.
         top_n: Number of top features to return.
@@ -59,7 +67,25 @@ def get_top_influential_features(
     Returns:
         List of dicts with 'feature' and 'score' keys, sorted by importance.
     """
-    saliency = compute_gradient_saliency(model, input_sample)
+    if _is_keras_model(model):
+        # Gradient-based saliency for Keras
+        saliency = compute_gradient_saliency(model, input_sample)
+    else:
+        # XGBoost: use built-in feature importances, handling calibration wrappers
+        if hasattr(model, 'feature_importances_'):
+            saliency = model.feature_importances_
+        elif hasattr(model, 'calibrated_classifiers_'):
+            importances = []
+            for c in model.calibrated_classifiers_:
+                estimator = getattr(c, 'base_estimator', getattr(c, 'estimator', None))
+                if estimator is not None and hasattr(estimator, 'feature_importances_'):
+                    importances.append(estimator.feature_importances_)
+            if importances:
+                saliency = np.mean(importances, axis=0)
+            else:
+                saliency = np.zeros(len(feature_names))
+        else:
+            saliency = np.zeros(len(feature_names))
 
     # Ensure we don't exceed available features
     n_features = min(len(saliency), len(feature_names))

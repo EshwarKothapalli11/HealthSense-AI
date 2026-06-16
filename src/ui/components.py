@@ -123,8 +123,8 @@ def build_about_html() -> str:
            matplotlib + seaborn</p>
         <hr class="glass-hr">
         <p class="sec-title">🤖 Models</p>
-        <p style="color:#2d4060;"><strong>Diabetes DNN</strong> — Dense(64→32→16) + Dropout + Sigmoid</p>
-        <p style="color:#2d4060;"><strong>Heart Disease DNN</strong> — Dense(128→64→32) + BatchNorm + Dropout</p>
+        <p style="color:#2d4060;"><strong>Diabetes XGBoost</strong> — Gradient-boosted tree ensemble (150 estimators, depth 3)</p>
+        <p style="color:#2d4060;"><strong>Heart Disease XGBoost</strong> — Gradient-boosted tree ensemble (100 estimators, depth 4)</p>
         <p style="color:#2d4060;"><strong>Mental Health LSTM</strong> — Embedding(64) → LSTM(64) → Dense(32)</p>
         <hr class="glass-hr">
         <p class="sec-title">🔗 Links</p>
@@ -153,12 +153,15 @@ def build_heart_inputs(prefix: str = "") -> list:
     return [
         gr.Slider(1,   120, value=50,  step=1,   label="Age"),
         gr.Radio(["Male", "Female"],              label="Sex", value="Male"),
-        gr.Dropdown([0, 1, 2, 3],                 label="Chest Pain Type (0-3)", value=0),
+        gr.Dropdown(["Typical Angina", "Atypical Angina", "Non-Anginal", "Asymptomatic"], label="Chest Pain Type", value="Typical Angina"),
         gr.Slider(80,  200, value=120, step=1,   label="Resting Blood Pressure"),
         gr.Slider(100, 400, value=200, step=1,   label="Cholesterol"),
         gr.Checkbox(label="Fasting Blood Sugar > 120 mg/dl", value=False),
+        gr.Dropdown(["Normal", "ST-T Abnormality", "LV Hypertrophy"], label="Resting ECG", value="Normal"),
         gr.Slider(60,  220, value=150, step=1,   label="Max Heart Rate Achieved"),
         gr.Checkbox(label="Exercise Induced Angina",          value=False),
         gr.Slider(0,   7,   value=1.0, step=0.1, label="ST Depression (Oldpeak)"),
         gr.Dropdown(["Up", "Flat", "Down"],       label="ST Slope", value="Flat"),
+        gr.Slider(0,   3,   value=0,   step=1,   label="Number of Major Vessels (CA)"),
+        gr.Dropdown(["Normal", "Fixed Defect", "Reversable Defect"], label="Thalassemia", value="Normal"),
     ]

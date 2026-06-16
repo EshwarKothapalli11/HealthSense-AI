@@ -64,7 +64,7 @@ def build_tokenizer(texts: list[str], vocab_size: int = 5000) -> Tokenizer:
     """
     tokenizer = Tokenizer(num_words=vocab_size, oov_token=config.OOV_TOKEN)
     tokenizer.fit_on_texts(texts)
-    print(f"  ✓ Tokenizer built — vocabulary size: {min(len(tokenizer.word_index), vocab_size)}")
+    print(f"  [SUCCESS] Tokenizer built — vocabulary size: {min(len(tokenizer.word_index), vocab_size)}")
     return tokenizer
 
 
@@ -98,7 +98,7 @@ def save_tokenizer(tokenizer: Tokenizer, path: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'wb') as f:
         pickle.dump(tokenizer, f)
-    print(f"  ✓ Tokenizer saved to {path}")
+    print(f"  [SUCCESS] Tokenizer saved to {path}")
 
 
 def load_tokenizer(path: str) -> Tokenizer:
@@ -119,7 +119,7 @@ def prepare_mental_health() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndar
     """
     Full preprocessing pipeline for the mental health text dataset.
 
-    Pipeline: load → clean text → build tokenizer → pad sequences → split → save tokenizer.
+    Pipeline: load → clean text → split raw text → build tokenizer on train → pad sequences → save tokenizer.
 
     Returns:
         Tuple of (X_train, X_test, y_train, y_test, tokenizer).
@@ -134,30 +134,32 @@ def prepare_mental_health() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndar
     # Remove empty texts
     df = df[df['text_clean'].str.len() > 0].reset_index(drop=True)
 
-    # Build tokenizer
-    tokenizer = build_tokenizer(
-        df['text_clean'].tolist(), vocab_size=config.VOCAB_SIZE
-    )
-
-    # Pad sequences
-    X = texts_to_padded(
-        df['text_clean'].tolist(), tokenizer, maxlen=config.MAX_TEXT_LEN
-    )
+    # Separate target
+    texts = df['text_clean'].tolist()
     y = df['label'].values.astype(np.float32)
 
-    # Split
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y,
+    # Split raw texts first to avoid token leakage
+    texts_train, texts_test, y_train, y_test = train_test_split(
+        texts, y,
         test_size=config.TEST_SIZE,
         random_state=config.RANDOM_STATE,
         stratify=y
     )
 
+    # Build tokenizer ONLY on train split
+    tokenizer = build_tokenizer(
+        texts_train, vocab_size=config.VOCAB_SIZE
+    )
+
+    # Pad sequences for train and test separately
+    X_train = texts_to_padded(texts_train, tokenizer, maxlen=config.MAX_TEXT_LEN)
+    X_test = texts_to_padded(texts_test, tokenizer, maxlen=config.MAX_TEXT_LEN)
+
     # Save tokenizer
     save_tokenizer(tokenizer, os.path.join(config.SCALERS_DIR, "mental_tokenizer.pkl"))
 
-    print(f"  ✓ Mental Health data ready — Train: {X_train.shape}, Test: {X_test.shape}")
-    print(f"  Label distribution: {dict(zip(*np.unique(y, return_counts=True)))}")
+    print(f"  [SUCCESS] Mental Health data ready — Train: {X_train.shape}, Test: {X_test.shape}")
+    print(f"  Label distribution: {dict(zip(*np.unique(y_train, return_counts=True)))}")
 
     return X_train, X_test, y_train, y_test, tokenizer
 

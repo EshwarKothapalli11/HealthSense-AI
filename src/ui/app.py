@@ -7,6 +7,7 @@ Model Insights, and About & Architecture.
 
 import os
 import sys
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -25,9 +26,31 @@ from src.evaluation.explainability import (
 from src.ui.visualizations import plot_gauge, plot_radar_chart
 
 
+def _predict_prob(model: Any, X: np.ndarray) -> float:
+    """
+    Get a single positive-class probability from any model type.
+
+    For XGBoost/sklearn: uses predict_proba()[:,1].
+    For Keras: uses predict() and flattens.
+
+    Args:
+        model: Trained model (Keras or XGBoost).
+        X: Input array (single sample, shape (1, n_features)).
+
+    Returns:
+        Positive-class probability as a float.
+    """
+    if hasattr(model, 'predict_proba'):
+        # XGBoost / sklearn API
+        return float(model.predict_proba(X)[0, 1])
+    else:
+        # Keras API
+        return float(model.predict(X, verbose=0)[0][0])
+
+
 def create_app(
-    diabetes_model: tf.keras.Model,
-    heart_model: tf.keras.Model,
+    diabetes_model: Any,
+    heart_model: Any,
     mental_model: tf.keras.Model,
     diabetes_scaler,
     heart_scaler,
@@ -40,8 +63,8 @@ def create_app(
     Build the full Gradio Blocks application with 5 tabs.
 
     Args:
-        diabetes_model: Trained diabetes Keras model.
-        heart_model: Trained heart disease Keras model.
+        diabetes_model: Trained diabetes model (XGBoost).
+        heart_model: Trained heart disease model (XGBoost).
         mental_model: Trained mental health LSTM Keras model.
         diabetes_scaler: Fitted StandardScaler for diabetes features.
         heart_scaler: Fitted StandardScaler for heart features.
@@ -58,9 +81,16 @@ def create_app(
         diabetes_features = config.DIABETES_COLUMNS[:-1]  # Exclude 'Outcome'
     if heart_features is None:
         heart_features = [
-            'age', 'sex', 'cp', 'trestbps', 'chol',
-            'fbs', 'restecg', 'thalach', 'exang',
-            'oldpeak', 'slope', 'ca', 'thal'
+            'age', 'trestbps', 'chol', 'thalach', 'oldpeak',
+            'clinical_risk_index',
+            'sex_1',
+            'cp_2', 'cp_3', 'cp_4',
+            'fbs_1',
+            'restecg_1', 'restecg_2',
+            'exang_1',
+            'slope_2', 'slope_3',
+            'ca_1.0', 'ca_2.0', 'ca_3.0',
+            'thal_6.0', 'thal_7.0'
         ]
 
     # ---- Prediction helper functions ----
@@ -71,33 +101,59 @@ def create_app(
         features_scaled = diabetes_scaler.transform(features)
         return features_scaled
 
-    def _prepare_heart_input(age, sex, cp, trestbps, chol, fbs, thalach, exang, oldpeak, slope):
+    def _prepare_heart_input(age, sex, cp, trestbps, chol, fbs, restecg, thalach, exang, oldpeak, slope, ca, thal):
         """Prepare heart input by dynamically building the one-hot encoded vector."""
+        age_val = float(age)
+        bp_val = float(trestbps)
+        chol_val = float(chol)
+        thalach_val = float(thalach)
+        oldpeak_val = float(oldpeak)
+        exang_val = 1.0 if exang else 0.0
+        ca_val = float(ca)
+        
+        thal_num = float({"Normal": 3, "Fixed Defect": 6, "Reversable Defect": 7}.get(thal, 3))
+        cp_num = float({"Typical Angina": 1, "Atypical Angina": 2, "Non-Anginal": 3, "Asymptomatic": 4}.get(cp, 1))
+        
+        # Clinical Risk Flags
+        age_risk = 1.0 if age_val > 65.0 else 0.0
+        bp_risk = 1.0 if bp_val > 140.0 else 0.0
+        chol_risk = 1.0 if chol_val > 240.0 else 0.0
+        thalach_risk = 1.0 if thalach_val < 120.0 else 0.0
+        oldpeak_risk = 1.0 if oldpeak_val > 2.0 else 0.0
+        exang_risk = 1.0 if exang_val == 1.0 else 0.0
+        ca_risk = 1.0 if ca_val > 0.0 else 0.0
+        thal_risk = 1.0 if thal_num in [6.0, 7.0] else 0.0
+        cp_risk = 1.0 if cp_num == 4.0 else 0.0
+        
+        risk_index = age_risk + bp_risk + chol_risk + thalach_risk + oldpeak_risk + exang_risk + ca_risk + thal_risk + cp_risk
+
         raw_dict = {
-            'age': float(age),
+            'age': age_val,
             'sex': 1.0 if sex == "Male" else 0.0,
-            'cp': float({"Typical Angina": 1, "Atypical Angina": 2, "Non-Anginal": 3, "Asymptomatic": 4}.get(cp, 1)),
-            'trestbps': float(trestbps),
-            'chol': float(chol),
+            'cp': cp_num,
+            'trestbps': bp_val,
+            'chol': chol_val,
             'fbs': 1.0 if fbs else 0.0,
-            'restecg': 0.0,
-            'thalach': float(thalach),
-            'exang': 1.0 if exang else 0.0,
-            'oldpeak': float(oldpeak),
+            'restecg': float({"Normal": 0, "ST-T Abnormality": 1, "LV Hypertrophy": 2}.get(restecg, 0)),
+            'thalach': thalach_val,
+            'exang': exang_val,
+            'oldpeak': oldpeak_val,
             'slope': float({"Up": 1, "Flat": 2, "Down": 3}.get(slope, 1)),
-            'ca': 0.0,
-            'thal': 3.0
+            'ca': ca_val,
+            'thal': thal_num,
+            'clinical_risk_index': float(risk_index)
         }
 
         feature_names = [
             'age', 'trestbps', 'chol', 'thalach', 'oldpeak',
-            'sex_1.0', 
-            'cp_2.0', 'cp_3.0', 'cp_4.0', 
-            'fbs_1.0', 
-            'restecg_1.0', 'restecg_2.0', 
-            'exang_1.0', 
-            'slope_2.0', 'slope_3.0', 
-            'ca_1.0', 'ca_2.0', 'ca_3.0', 
+            'clinical_risk_index',
+            'sex_1',
+            'cp_2', 'cp_3', 'cp_4',
+            'fbs_1',
+            'restecg_1', 'restecg_2',
+            'exang_1',
+            'slope_2', 'slope_3',
+            'ca_1.0', 'ca_2.0', 'ca_3.0',
             'thal_6.0', 'thal_7.0'
         ]
         
@@ -108,10 +164,10 @@ def create_app(
                 # Direct continuous match
                 input_array[i] = raw_dict[col]
             elif '_' in col:
-                # One-hot encoded feature match (e.g. 'cp_2.0')
+                # One-hot encoded feature match (e.g. 'cp_2' or 'ca_1.0')
                 try:
                     base_feat, val = col.rsplit('_', 1)
-                    if base_feat in raw_dict and float(raw_dict[base_feat]) == float(val):
+                    if base_feat in raw_dict and raw_dict[base_feat] == float(val):
                         input_array[i] = 1.0
                 except ValueError:
                     pass
@@ -129,22 +185,22 @@ def create_app(
     # ---- Tab 1: Physical Health ----
 
     def predict_physical(
-        glucose, bp, skin, insulin, bmi, dpf, age_d,
-        age_h, sex, cp, trestbps, chol, fbs, thalach, exang, oldpeak, slope
+        pregnancies, glucose, bp, skin, insulin, bmi, dpf, age_d,
+        age_h, sex, cp, trestbps, chol, fbs, restecg, thalach, exang, oldpeak, slope, ca, thal
     ):
         """Run diabetes and heart disease predictions."""
         try:
             # Diabetes prediction
             d_input = _prepare_diabetes_input(
-                0, glucose, bp, skin, insulin, bmi, dpf, age_d
+                pregnancies, glucose, bp, skin, insulin, bmi, dpf, age_d
             )
-            d_prob = float(diabetes_model.predict(d_input, verbose=0)[0][0])
+            d_prob = _predict_prob(diabetes_model, d_input)
 
             # Heart prediction
             h_input = _prepare_heart_input(
-                age_h, sex, cp, trestbps, chol, fbs, thalach, exang, oldpeak, slope
+                age_h, sex, cp, trestbps, chol, fbs, restecg, thalach, exang, oldpeak, slope, ca, thal
             )
-            h_prob = float(heart_model.predict(h_input, verbose=0)[0][0])
+            h_prob = _predict_prob(heart_model, h_input)
 
             # Labels
             d_label = {
@@ -190,9 +246,9 @@ def create_app(
             m_input = _prepare_mental_input(text)
             m_prob = float(mental_model.predict(m_input, verbose=0)[0][0])
 
-            status = "High Stress/Depression" if m_prob >= 0.5 else "Healthy"
+            status = "Depressed/Stressed" if m_prob >= 0.5 else "Healthy"
             m_label = {
-                "High Stress/Depression": m_prob,
+                "Depressed/Stressed": m_prob,
                 "Healthy": 1 - m_prob
             }
 
@@ -240,8 +296,8 @@ def create_app(
     # ---- Tab 3: Unified Health Report ----
 
     def generate_full_report(
-        glucose, bp, skin, insulin, bmi, dpf, age_d,
-        age_h, sex, cp, trestbps, chol, fbs, thalach, exang, oldpeak, slope,
+        pregnancies, glucose, bp, skin, insulin, bmi, dpf, age_d,
+        age_h, sex, cp, trestbps, chol, fbs, restecg, thalach, exang, oldpeak, slope, ca, thal,
         mental_text,
         w_d, w_h, w_m, m_thresh
     ):
@@ -249,15 +305,15 @@ def create_app(
         try:
             # Diabetes
             d_input = _prepare_diabetes_input(
-                0, glucose, bp, skin, insulin, bmi, dpf, age_d
+                pregnancies, glucose, bp, skin, insulin, bmi, dpf, age_d
             )
-            d_prob = float(diabetes_model.predict(d_input, verbose=0)[0][0])
+            d_prob = _predict_prob(diabetes_model, d_input)
 
             # Heart
             h_input = _prepare_heart_input(
-                age_h, sex, cp, trestbps, chol, fbs, thalach, exang, oldpeak, slope
+                age_h, sex, cp, trestbps, chol, fbs, restecg, thalach, exang, oldpeak, slope, ca, thal
             )
-            h_prob = float(heart_model.predict(h_input, verbose=0)[0][0])
+            h_prob = _predict_prob(heart_model, h_input)
 
             # Mental
             if mental_text and len(mental_text.strip()) >= 5:
@@ -1534,6 +1590,7 @@ def create_app(
             with gr.Row():
                 with gr.Column(scale=1):
                     gr.Markdown("### 🩸 Diabetes Risk Factors")
+                    d_pregnancies = gr.Slider(0, 17, step=1, value=1, label="Pregnancies")
                     d_glucose = gr.Slider(0, 200, step=1, value=100, label="Glucose (mg/dL)")
                     d_bp = gr.Slider(0, 140, step=1, value=70, label="Blood Pressure (mm Hg)")
                     d_skin = gr.Slider(0, 100, step=1, value=20, label="Skin Thickness (mm)")
@@ -1550,10 +1607,13 @@ def create_app(
                     h_trestbps = gr.Slider(80, 200, step=1, value=120, label="Resting BP (mm Hg)")
                     h_chol = gr.Slider(100, 600, step=1, value=200, label="Cholesterol (mg/dl)")
                     h_fbs = gr.Checkbox(label="Fasting Blood Sugar > 120 mg/dl", value=False)
+                    h_restecg = gr.Dropdown(["Normal", "ST-T Abnormality", "LV Hypertrophy"], value="Normal", label="Resting ECG")
                     h_thalach = gr.Slider(60, 220, step=1, value=150, label="Max Heart Rate")
                     h_exang = gr.Checkbox(label="Exercise Induced Angina", value=False)
                     h_oldpeak = gr.Slider(0.0, 7.0, step=0.1, value=1.0, label="Oldpeak")
                     h_slope = gr.Dropdown(["Up", "Flat", "Down"], value="Up", label="ST Slope")
+                    h_ca = gr.Slider(0, 3, step=1, value=0, label="Number of Major Vessels (CA)")
+                    h_thal = gr.Dropdown(["Normal", "Fixed Defect", "Reversable Defect"], value="Normal", label="Thalassemia")
 
             physical_btn = gr.Button(
                 "🔍 Assess Physical Health",
@@ -1574,10 +1634,10 @@ def create_app(
             physical_btn.click(
                 fn=predict_physical,
                 inputs=[
-                    d_glucose, d_bp, d_skin, d_insulin,
+                    d_pregnancies, d_glucose, d_bp, d_skin, d_insulin,
                     d_bmi, d_dpf, d_age,
-                    h_age, h_sex, h_cp, h_trestbps, h_chol, h_fbs,
-                    h_thalach, h_exang, h_oldpeak, h_slope
+                    h_age, h_sex, h_cp, h_trestbps, h_chol, h_fbs, h_restecg,
+                    h_thalach, h_exang, h_oldpeak, h_slope, h_ca, h_thal
                 ],
                 outputs=[d_result, h_result, gauge_plot, feat_df]
             )
@@ -1656,9 +1716,9 @@ def create_app(
 
             outputs_list = [ud_label, uh_label, um_label, u_composite, u_summary, u_recs, u_radar, u_export_file]
             inputs_list = [
-                d_glucose, d_bp, d_skin, d_insulin, d_bmi, d_dpf, d_age,
-                h_age, h_sex, h_cp, h_trestbps, h_chol, h_fbs,
-                h_thalach, h_exang, h_oldpeak, h_slope,
+                d_pregnancies, d_glucose, d_bp, d_skin, d_insulin, d_bmi, d_dpf, d_age,
+                h_age, h_sex, h_cp, h_trestbps, h_chol, h_fbs, h_restecg,
+                h_thalach, h_exang, h_oldpeak, h_slope, h_ca, h_thal,
                 mental_text, u_w_d, u_w_h, u_w_m, u_m_thresh
             ]
 
@@ -1742,7 +1802,7 @@ def create_app(
                 perf_data = perf_df
             else:
                 perf_data = pd.DataFrame({
-                    'Model': ['Diabetes DNN', 'Heart Disease DNN', 'Mental Health LSTM'],
+                    'Model': ['Diabetes XGBoost', 'Heart Disease XGBoost', 'Mental Health LSTM'],
                     'Accuracy': ['—', '—', '—'],
                     'AUC': ['—', '—', '—'],
                     'F1-Score': ['—', '—', '—']
@@ -1770,7 +1830,8 @@ def create_app(
             ## 🛠️ Tech Stack
             | Technology | Purpose |
             |-----------|---------|
-            | **TensorFlow / Keras** | Deep learning model training and inference |
+            | **TensorFlow / Keras** | LSTM model training and inference |
+            | **XGBoost** | Gradient-boosted tree models for tabular data |
             | **scikit-learn** | Data preprocessing, metrics, and feature importance |
             | **Gradio** | Interactive web-based user interface |
             | **Python 3.10+** | Core programming language |
@@ -1781,16 +1842,16 @@ def create_app(
 
             ## 🧠 Model Architectures
 
-            ### 1. Diabetes Risk DNN
-            - **Type:** Feedforward Deep Neural Network
-            - **Layers:** Dense(64) → Dropout(0.3) → Dense(32) → Dropout(0.2) → Dense(16) → Sigmoid
-            - **Input:** 8 clinical features (Glucose, BMI, Age, etc.)
+            ### 1. Diabetes Risk Model
+            - **Type:** XGBoost Gradient-Boosted Tree Ensemble
+            - **Config:** 150 estimators, max_depth=3, learning_rate=0.01
+            - **Input:** 8 clinical features (Pregnancies, Glucose, BMI, Age, etc.)
             - **Output:** Binary classification (Diabetic / Non-Diabetic)
 
-            ### 2. Heart Disease DNN
-            - **Type:** Feedforward DNN with Batch Normalization
-            - **Layers:** Dense(128) → BN → Dropout(0.4) → Dense(64) → BN → Dropout(0.3) → Dense(32) → Sigmoid
-            - **Input:** 13 clinical features (Age, Cholesterol, BP, etc.)
+            ### 2. Heart Disease Model
+            - **Type:** XGBoost Gradient-Boosted Tree Ensemble
+            - **Config:** 100 estimators, max_depth=4, learning_rate=0.05
+            - **Input:** 20 features (5 continuous + 15 one-hot encoded categorical)
             - **Output:** Binary classification (Heart Disease / Healthy)
 
             ### 3. Mental Health LSTM

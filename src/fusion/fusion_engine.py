@@ -120,7 +120,7 @@ class HealthFusionEngine:
             risk_tier = 'Critical'
 
         # 4. Mental health status
-        mental_status = 'High Stress/Depression' if mental_prob >= m_threshold else 'Healthy'
+        mental_status = 'Depressed/Stressed' if mental_prob >= m_threshold else 'Healthy'
 
         # 5. Generate summary and recommendations
         health_summary = self._generate_summary(

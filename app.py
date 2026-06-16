@@ -20,9 +20,9 @@ os.makedirs(config.MODELS_DIR, exist_ok=True)
 os.makedirs(config.SCALERS_DIR, exist_ok=True)
 os.makedirs(config.PLOTS_DIR, exist_ok=True)
 
-# Paths
-diabetes_model_path = os.path.join(config.MODELS_DIR, 'diabetes_best.h5')
-heart_model_path = os.path.join(config.MODELS_DIR, 'heart_best.h5')
+# Paths — Diabetes & Heart use .pkl (XGBoost), Mental uses .h5 (Keras LSTM)
+diabetes_model_path = os.path.join(config.MODELS_DIR, 'diabetes_best.pkl')
+heart_model_path = os.path.join(config.MODELS_DIR, 'heart_best.pkl')
 mental_model_path = os.path.join(config.MODELS_DIR, 'mental_best.h5')
 
 diabetes_scaler_path = os.path.join(config.SCALERS_DIR, 'diabetes_scaler.pkl')
@@ -44,8 +44,12 @@ if missing_files:
 
 try:
     print("[INFO] Loading models...")
-    diabetes_model = tf.keras.models.load_model(diabetes_model_path, compile=False)
-    heart_model = tf.keras.models.load_model(heart_model_path, compile=False)
+    # Diabetes & Heart: XGBoost (pickle)
+    with open(diabetes_model_path, 'rb') as f:
+        diabetes_model = pickle.load(f)
+    with open(heart_model_path, 'rb') as f:
+        heart_model = pickle.load(f)
+    # Mental: Keras LSTM (.h5)
     mental_model = tf.keras.models.load_model(mental_model_path, compile=False)
     
     print("[INFO] Loading preprocessors...")
@@ -76,6 +80,6 @@ demo = create_app(
 
 if __name__ == "__main__":
     print("\n" + "=" * 60)
-    print("  🚀 READY! Launching web server...")
+    print("  READY! Launching web server...")
     print("=" * 60)
-    demo.launch(server_name="0.0.0.0", server_port=7860)
+    demo.launch(server_name="0.0.0.0", server_port=7860, share=True)

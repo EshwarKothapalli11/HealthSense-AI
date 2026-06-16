@@ -1,0 +1,4 @@
+Model,Accuracy,AUC,F1-Score
+Diabetes XGBoost,0.7468,0.8263,0.6829
+Heart Disease XGBoost,0.8592,0.9545,0.8649
+Mental Health LSTM,0.9517,0.9875,0.9650

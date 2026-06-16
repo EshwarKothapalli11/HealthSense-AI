@@ -7,21 +7,33 @@ import pytest
 
 
 def test_diabetes_model_output_shape():
-    """Test that diabetes model produces correct output shape."""
+    """Test that diabetes XGBoost model produces correct output shape."""
     from src.models.diabetes_model import build_diabetes_model
     model = build_diabetes_model(input_dim=8)
-    dummy = np.random.rand(4, 8).astype(np.float32)
-    out = model.predict(dummy, verbose=0)
-    assert out.shape == (4, 1), f"Expected (4, 1), got {out.shape}"
+    # Fit on minimal data so predict works
+    X_dummy = np.random.rand(10, 8).astype(np.float32)
+    y_dummy = np.array([0, 1, 0, 1, 0, 1, 0, 1, 0, 1])
+    model.fit(X_dummy, y_dummy)
+    X_test = np.random.rand(4, 8).astype(np.float32)
+    proba = model.predict_proba(X_test)
+    assert proba.shape == (4, 2), f"Expected (4, 2), got {proba.shape}"
+    pred = model.predict(X_test)
+    assert pred.shape == (4,), f"Expected (4,), got {pred.shape}"
 
 
 def test_heart_model_output_shape():
-    """Test that heart model produces correct output shape."""
+    """Test that heart XGBoost model produces correct output shape."""
     from src.models.heart_model import build_heart_model
     model = build_heart_model(input_dim=13)
-    dummy = np.random.rand(4, 13).astype(np.float32)
-    out = model.predict(dummy, verbose=0)
-    assert out.shape == (4, 1), f"Expected (4, 1), got {out.shape}"
+    # Fit on minimal data so predict works
+    X_dummy = np.random.rand(10, 13).astype(np.float32)
+    y_dummy = np.array([0, 1, 0, 1, 0, 1, 0, 1, 0, 1])
+    model.fit(X_dummy, y_dummy)
+    X_test = np.random.rand(4, 13).astype(np.float32)
+    proba = model.predict_proba(X_test)
+    assert proba.shape == (4, 2), f"Expected (4, 2), got {proba.shape}"
+    pred = model.predict(X_test)
+    assert pred.shape == (4,), f"Expected (4,), got {pred.shape}"
 
 
 def test_mental_model_output_shape():
@@ -34,21 +46,27 @@ def test_mental_model_output_shape():
 
 
 def test_diabetes_model_output_range():
-    """Test that diabetes model output is between 0 and 1 (sigmoid)."""
+    """Test that diabetes XGBoost predict_proba is between 0 and 1."""
     from src.models.diabetes_model import build_diabetes_model
     model = build_diabetes_model(input_dim=8)
-    dummy = np.random.rand(10, 8).astype(np.float32)
-    out = model.predict(dummy, verbose=0)
-    assert (out >= 0).all() and (out <= 1).all(), "Output should be in [0, 1]"
+    X_dummy = np.random.rand(20, 8).astype(np.float32)
+    y_dummy = np.array([0, 1] * 10)
+    model.fit(X_dummy, y_dummy)
+    X_test = np.random.rand(10, 8).astype(np.float32)
+    proba = model.predict_proba(X_test)[:, 1]
+    assert (proba >= 0).all() and (proba <= 1).all(), "Output should be in [0, 1]"
 
 
 def test_heart_model_output_range():
-    """Test that heart model output is between 0 and 1 (sigmoid)."""
+    """Test that heart XGBoost predict_proba is between 0 and 1."""
     from src.models.heart_model import build_heart_model
     model = build_heart_model(input_dim=13)
-    dummy = np.random.rand(10, 13).astype(np.float32)
-    out = model.predict(dummy, verbose=0)
-    assert (out >= 0).all() and (out <= 1).all(), "Output should be in [0, 1]"
+    X_dummy = np.random.rand(20, 13).astype(np.float32)
+    y_dummy = np.array([0, 1] * 10)
+    model.fit(X_dummy, y_dummy)
+    X_test = np.random.rand(10, 13).astype(np.float32)
+    proba = model.predict_proba(X_test)[:, 1]
+    assert (proba >= 0).all() and (proba <= 1).all(), "Output should be in [0, 1]"
 
 
 def test_mental_model_output_range():
